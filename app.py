@@ -1,36 +1,45 @@
 import torch
 import streamlit as st
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 
 def load_model():
-    # Check if CUDA is available and set the device accordingly
-    if torch.cuda.is_available():
-        device = "cuda"
-    else:
-        device = "cpu"
-        st.warning("CUDA not found. Using CPU instead.")
+    # Configure quantization
+    quantization_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
 
     # Model and tokenizer
     base_model = "aman-augurs/falcon7b-fine-tuned"
 
-    # Load the tokenizer and model
-    tokenizer = AutoTokenizer.from_pretrained(base_model)
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        device_map="auto",
-        torch_dtype=torch.float16,
-        load_in_4bit=True,
-        trust_remote_code=True,
-    )
+    try:
+        # Load the tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(base_model)
+        
+        # Load the model with updated configuration
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            quantization_config=quantization_config,
+            device_map="auto",
+        )
 
-    return tokenizer, model, device
+        # Determine device
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        return tokenizer, model, device
+
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
+        return None, None, None
 
 def generate_response(tokenizer, model, device, prompt):
-    # Encode input
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    try:
+        # Encode input
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
-    # Generate output with temperature setting
-    with torch.no_grad():
+        # Generate output with temperature setting
         outputs = model.generate(
             inputs['input_ids'],
             max_length=200,
@@ -42,33 +51,44 @@ def generate_response(tokenizer, model, device, prompt):
             no_repeat_ngram_size=3
         )
 
-    # Decode the output
-    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return generated_text
+        # Decode the output
+        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return generated_text
+
+    except Exception as e:
+        st.error(f"Error generating response: {e}")
+        return "An error occurred during response generation."
 
 def main():
-    # Set page title and icon
-    st.set_page_config(page_title="Claim Query App", page_icon="🤖")
+    # Set page configuration
+    st.set_page_config(page_title="Falcon 7B Query App", page_icon="🤖")
 
     # Title and description
-    st.title("Falcon 7B based Query Interface")
-    st.markdown("Ask a query Related to Claim data and get AI-generated responses!")
+    st.title("Falcon 7B Query Interface")
+    st.markdown("Ask a query and get AI-generated responses!")
+
+    # Check CUDA availability
+    if not torch.cuda.is_available():
+        st.warning("CUDA is not available. The app will run on CPU, which may be slower.")
 
     # Load model (only once)
     if 'tokenizer' not in st.session_state:
-        try:
-            tokenizer, model, device = load_model()
+        tokenizer, model, device = load_model()
+        
+        if tokenizer and model:
             st.session_state['tokenizer'] = tokenizer
             st.session_state['model'] = model
             st.session_state['device'] = device
-        except Exception as e:
-            st.error(f"Error loading model: {e}")
+        else:
+            st.error("Failed to load the model. Please check your setup.")
             return
 
     # Input text area for user query
-    user_prompt = st.text_area("Enter your query:", 
-                                placeholder="Type your question here...", 
-                                height=100)
+    user_prompt = st.text_area(
+        "Enter your query:", 
+        placeholder="Type your question here...", 
+        height=100
+    )
 
     # Generate button
     if st.button("Generate Response"):
